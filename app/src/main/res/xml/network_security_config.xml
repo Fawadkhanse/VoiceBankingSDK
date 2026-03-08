@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">speech.googleapis.com</domain>
+        <domain includeSubdomains="true">texttospeech.googleapis.com</domain>
+        <domain includeSubdomains="true">oauth2.googleapis.com</domain>
+    </domain-config>
+    <!-- Allow HTTP for local bank API server -->
+    <base-config cleartextTrafficPermitted="true"/>
+</network-security-config>
