@@ -4,10 +4,12 @@ import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonParser
 import com.voicebanking.sdk.models.ActionStatusMessage
+import com.voicebanking.sdk.models.BeneficiaryPayload
 import com.voicebanking.sdk.models.ClientResponseMessage
 import com.voicebanking.sdk.models.InternalActionPayload
 import com.voicebanking.sdk.models.InternalChatEvent
 import com.voicebanking.sdk.models.InternalServerMessage
+import com.voicebanking.sdk.models.SdkBeneficiary
 import com.voicebanking.sdk.models.UserChatMessage
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -109,13 +111,13 @@ internal class BankChatRepository(
         return requestId
     }
 
-    fun sendBeneficiaryList(requestId: String, beneficiaries: List<Map<String, String>>) {
+    fun sendBeneficiaryList(requestId: String, beneficiaries: List<SdkBeneficiary>) {
         val resp = ClientResponseMessage(
             type       = "client_response",
             request_id = requestId,
             action     = "get_beneficiary_list",
-            payload    = mapOf("beneficiaries" to beneficiaries)
-        )
+            payload    = BeneficiaryPayload(beneficiaries) )
+
         webSocket?.send(gson.toJson(resp))
     }
 

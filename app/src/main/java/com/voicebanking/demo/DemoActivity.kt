@@ -4,6 +4,7 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.util.Log
 import android.view.MotionEvent
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -114,8 +115,9 @@ class DemoActivity : AppCompatActivity() {
                 is SdkEvent.ActionRequired ->
                     showActionConfirmation(event.action)
 
-                is SdkEvent.BeneficiaryListRequested ->
-                    sdk.sendBeneficiaryList(event.requestId, myBeneficiaries)
+                is SdkEvent.BeneficiaryListRequested ->{
+                    Log.d("TAG", "BeneficiaryListRequested$myBeneficiaries")
+                    sdk.sendBeneficiaryList(event.requestId, myBeneficiaries)}
             }
         }
     }

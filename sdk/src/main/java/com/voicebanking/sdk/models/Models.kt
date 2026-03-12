@@ -1,5 +1,7 @@
 package com.voicebanking.sdk.models
 
+import com.google.gson.annotations.SerializedName
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Public SDK configuration
 // ─────────────────────────────────────────────────────────────────────────────
@@ -115,7 +117,9 @@ data class SdkAction(
 )
 
 data class SdkBeneficiary(
+    @SerializedName("beneficiary_name")
     val beneficiaryName: String,
+    @SerializedName("bank_name")
     val bankName:        String
 )
 
@@ -128,12 +132,17 @@ internal data class UserChatMessage(
     val request_id: String
 )
 
+
 internal data class ClientResponseMessage(
     val type:       String,
     val request_id: String,
     val action:     String,
-    val payload:    Map<String, Any>
+    val payload:    BeneficiaryPayload
 )
+internal data class BeneficiaryPayload(
+    val beneficiaries:List<SdkBeneficiary>
+ )
+
 
 internal data class ActionStatusMessage(
     val type:        String,

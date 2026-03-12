@@ -257,10 +257,10 @@ class VoiceBankingSDK private constructor() {
      * Supply the beneficiary list when the SDK emits [SdkEvent.BeneficiaryListRequested].
      */
     fun sendBeneficiaryList(requestId: String, beneficiaries: List<SdkBeneficiary>) {
-        val mapped = beneficiaries.map {
-            mapOf("beneficiary_name" to it.beneficiaryName, "bank_name" to it.bankName)
-        }
-        repo?.sendBeneficiaryList(requestId, mapped)
+//        val mapped = beneficiaries.map {
+//            mapOf("beneficiary_name" to it.beneficiaryName, "bank_name" to it.bankName)
+//        }
+        repo?.sendBeneficiaryList(requestId, beneficiaries)
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -350,13 +350,15 @@ class VoiceBankingSDK private constructor() {
 
                     is InternalChatEvent.MessageReceived -> {
                         emit(SdkEvent.BotMessageReceived(event.text))
-                        // Auto-speak the bot reply
+                        // ── Auto-speak the bot reply ──
+                        // Do NOT restart recording after playback — let the host app control that
                         speak(event.text)
                     }
 
                     is InternalChatEvent.ActionReceived -> {
                         val reqId = UUID.randomUUID().toString()
                         pendingRequestId = reqId
+                        // ── Emit to host app FIRST so it can handle the UI ──
                         emit(SdkEvent.ActionRequired(
                             SdkAction(
                                 serviceName = event.action.serviceName,
@@ -365,6 +367,16 @@ class VoiceBankingSDK private constructor() {
                                 requestId   = reqId
                             )
                         ))
+                        // ── Auto-confirm so server proceeds to send the message response ──
+                        // Use a small delay to ensure the fragment handles UI first
+                        kotlinx.coroutines.delay(100)
+                        repo?.sendActionStatus(
+                            requestId   = reqId,
+                            actionId    = event.action.action_id,
+                            serviceName = event.action.serviceName,
+                            status      = "completed",
+                            message     = "Completed automatically"
+                        )
                     }
 
                     is InternalChatEvent.BeneficiaryListRequested ->
