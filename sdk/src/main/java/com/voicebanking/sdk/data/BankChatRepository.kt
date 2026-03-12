@@ -1,6 +1,5 @@
 package com.voicebanking.sdk.data
 
-import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.JsonParser
 import com.voicebanking.sdk.models.ActionStatusMessage
@@ -12,7 +11,7 @@ import com.voicebanking.sdk.models.InternalServerMessage
 import com.voicebanking.sdk.models.SdkBeneficiary
 import com.voicebanking.sdk.models.UserChatMessage
 import com.voicebanking.sdk.models.WsMessage
-import com.voicebanking.sdk.utils.toPojo
+import com.voicebanking.sdk.utils.SdkLogger
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import okhttp3.OkHttpClient
@@ -29,7 +28,7 @@ internal class BankChatRepository(
     private val baseUrl:      String,
     enableLogging:            Boolean = false
 ) {
-    private val TAG  = "SDK_WS"
+    private val SUB = "WS"          // subtag shown inside [ ] in every log line
     private val gson = Gson()
 
     private val httpClient: OkHttpClient
@@ -41,7 +40,7 @@ internal class BankChatRepository(
             .writeTimeout(30, TimeUnit.SECONDS)
         if (enableLogging) {
             builder.addInterceptor(HttpLoggingInterceptor { msg ->
-                Log.d("SDK_HTTP", msg)
+                SdkLogger.d("HTTP", msg)
             }.apply { level = HttpLoggingInterceptor.Level.BODY })
         }
         httpClient = builder.build()
@@ -65,9 +64,9 @@ internal class BankChatRepository(
         val response = httpClient.newCall(request).execute()
         val body     = response.body?.string() ?: throw RuntimeException("Empty body from /start-session")
         val id       = JSONObject(body).getString("session_id")
-        Log.d(TAG, "startSession: $body")
+        SdkLogger.d(SUB, "startSession → $body")
         sessionId    = id
-        Log.d(TAG, "session_id=$id")
+        SdkLogger.d(SUB, "session_id=$id")
         return id
     }
 
@@ -77,24 +76,25 @@ internal class BankChatRepository(
         disconnect()
         val wsBase = baseUrl.replace("http://", "ws://").replace("https://", "wss://")
         val url    = "$wsBase/chat/$sid"
-        Log.d(TAG, "WS CONNECT → $url")
+        SdkLogger.d(SUB, "CONNECT → $url")
 
         val req = Request.Builder().url(url).build()
         webSocket = httpClient.newWebSocket(req, object : WebSocketListener() {
             override fun onOpen(ws: WebSocket, response: Response) {
-                Log.d(TAG, "WS OPEN")
+                SdkLogger.d(SUB, "OPEN")
                 _events.tryEmit(InternalChatEvent.Connected)
             }
             override fun onMessage(ws: WebSocket, text: String) {
-                Log.d(TAG, "WS RECV Response=${text}")
+                SdkLogger.d(SUB, "RECV ← $text")
                 handleIncoming(text)
             }
             override fun onClosing(ws: WebSocket, code: Int, reason: String) {
+                SdkLogger.d(SUB, "CLOSING code=$code reason=$reason")
                 ws.close(1000, null)
                 _events.tryEmit(InternalChatEvent.Disconnected(reason))
             }
             override fun onFailure(ws: WebSocket, t: Throwable, response: Response?) {
-                Log.e(TAG, "WS FAILURE: ${t.message}")
+                SdkLogger.e(SUB, "FAILURE: ${t.message}", t)
                 _events.tryEmit(InternalChatEvent.Error(t.message ?: "WebSocket failure"))
             }
         })
@@ -110,7 +110,9 @@ internal class BankChatRepository(
     fun sendUserMessage(text: String): String {
         val requestId = UUID.randomUUID().toString()
         val msg  = UserChatMessage(message = text, request_id = requestId)
-        webSocket?.send(gson.toJson(msg))
+        val json = gson.toJson(msg)
+        SdkLogger.d(SUB, "SEND userMessage → $json")
+        webSocket?.send(json)
         return requestId
     }
 
@@ -119,9 +121,11 @@ internal class BankChatRepository(
             type       = "client_response",
             request_id = requestId,
             action     = "get_beneficiary_list",
-            payload    = BeneficiaryPayload(beneficiaries) )
-
-        webSocket?.send(gson.toJson(resp))
+            payload    = BeneficiaryPayload(beneficiaries)
+        )
+        val json = gson.toJson(resp)
+        SdkLogger.d(SUB, "SEND beneficiaryList → $json")
+        webSocket?.send(json)
     }
 
     fun sendActionStatus(
@@ -139,19 +143,22 @@ internal class BankChatRepository(
             status      = status,
             message     = message
         )
-        webSocket?.send(gson.toJson(msg))
+        val json = gson.toJson(msg)
+        SdkLogger.d(SUB, "SEND actionStatus[$status] → $json")
+        webSocket?.send(json)
     }
 
     // ── Incoming parser ───────────────────────────────────────────────────────
 
     private fun handleIncoming(raw: String) {
         if (raw.isBlank() || raw.trim().all { it.isDigit() }) {
-            Log.d(TAG, "Skipping non-JSON frame: $raw")
+            SdkLogger.d(SUB, "Skipping non-JSON frame: $raw")
             return
         }
         try {
             val el = JsonParser.parseString(raw)
 
+            // ── JSON array: list of typed objects ─────────────────────────────
             if (el.isJsonArray) {
                 var actionPayload: InternalActionPayload? = null
                 var messageText: String? = null
@@ -163,45 +170,74 @@ internal class BankChatRepository(
                         "message" -> messageText   = obj.get("message")?.asString
                     }
                 }
-                actionPayload?.let { _events.tryEmit(InternalChatEvent.ActionReceived(it)) }
-                messageText?.let   { _events.tryEmit(InternalChatEvent.MessageReceived(it)) }
+                actionPayload?.let {
+                  //  SdkLogger.d(SUB, "Parsed action from array: ${it.serviceName}")
+                    _events.tryEmit(InternalChatEvent.ActionReceived(it))
+                }
+                messageText?.let {
+                //    SdkLogger.d(SUB, "Parsed message from array: $it")
+                    _events.tryEmit(InternalChatEvent.MessageReceived(it))
+                }
                 return
             }
 
             val obj      = el.asJsonObject
             val rootType = obj.get("type")?.asString
+            SdkLogger.d(SUB, "Incoming type=$rootType")
 
-            // ── server_request (e.g. get_beneficiary_list) ────────────────────────
+            // ── server_request (e.g. get_beneficiary_list) ────────────────────
             if (rootType == "server_request") {
                 val action    = obj.get("action")?.asString ?: return
                 val requestId = obj.get("request_id")?.asString ?: UUID.randomUUID().toString()
+           //     SdkLogger.d(SUB, "server_request action=$action requestId=$requestId")
                 if (action == "get_beneficiary_list") {
                     _events.tryEmit(InternalChatEvent.BeneficiaryListRequested(requestId))
                 }
                 return
             }
 
-            // ── flat message/action (no payload wrapper) ──────────────────────────
-            // e.g. { "type": "message", "message": "..." }
+            // ── action_bundle: { type, payload: { action, message } } ─────────
+            // Observed in logs: "type":"action_bundle","payload":{"action":{…},"message":"…"}
+            if (rootType == "action_bundle") {
+                val payloadObj = obj.get("payload")?.asJsonObject
+                if (payloadObj != null) {
+                    val actionObj = payloadObj.get("action")?.asJsonObject
+                    val msgText   = payloadObj.get("message")?.asString
+
+                    if (actionObj != null) {
+                        val actionPayload = gson.fromJson(actionObj, InternalActionPayload::class.java)
+                        SdkLogger.d(SUB, "action_bundle → action=${actionPayload.serviceName} msg=$msgText")
+                        _events.tryEmit(InternalChatEvent.ActionReceived(actionPayload))
+                    }
+                    if (!msgText.isNullOrEmpty()) {
+                        _events.tryEmit(InternalChatEvent.MessageReceived(msgText))
+                    }
+                }
+                return
+            }
+
+            // ── flat message/action (no payload wrapper) ──────────────────────
             if (obj.get("payload") == null) {
                 when (rootType) {
                     "message" -> {
                         val text = obj.get("message")?.asString ?: return
+                      //  SdkLogger.d(SUB, "flat message: $text")
                         _events.tryEmit(InternalChatEvent.MessageReceived(text))
                     }
                     "action" -> {
                         val action = gson.fromJson(obj, InternalServerMessage.Action::class.java).action
+                //        SdkLogger.d(SUB, "flat action: ${action.serviceName}")
                         _events.tryEmit(InternalChatEvent.ActionReceived(action))
                     }
                 }
                 return
             }
 
-            // ── wrapped payload ───────────────────────────────────────────────────
-            // e.g. { "type": "message", "payload": { "message": "..." } }
+            // ── wrapped payload ───────────────────────────────────────────────
             val payload = obj.get("payload")
 
             if (payload.isJsonArray) {
+              //  SdkLogger.d(SUB, "payload is array — recursing")
                 handleIncoming(payload.toString())
                 return
             }
@@ -211,16 +247,19 @@ internal class BankChatRepository(
             when (rootType) {
                 "message" -> {
                     val text = payloadObj.get("message")?.asString ?: return
+                  //  SdkLogger.d(SUB, "wrapped message: $text")
                     _events.tryEmit(InternalChatEvent.MessageReceived(text))
                 }
                 "action" -> {
                     val action = gson.fromJson(payloadObj, InternalServerMessage.Action::class.java).action
+                  //  SdkLogger.d(SUB, "wrapped action: ${action.serviceName}")
                     _events.tryEmit(InternalChatEvent.ActionReceived(action))
                 }
+                else -> SdkLogger.w(SUB, "Unhandled type=$rootType payload=$payloadObj")
             }
 
         } catch (e: Exception) {
-            Log.e(TAG, "Parse error: ${e.message} | raw=$raw")
+            SdkLogger.e(SUB, "Parse error: ${e.message} | raw=$raw", e)
         }
     }
 }

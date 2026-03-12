@@ -15,6 +15,7 @@ import com.voicebanking.sdk.VoiceBankingSDK
 import com.voicebanking.sdk.models.SdkAction
 import com.voicebanking.sdk.models.SdkBeneficiary
 import com.voicebanking.sdk.models.SdkEvent
+import com.voicebanking.sdk.models.VoiceBankingConfig
 
 class DemoActivity : AppCompatActivity() {
 
@@ -67,7 +68,7 @@ class DemoActivity : AppCompatActivity() {
     private fun initSdk() {
         if (sdk.isInitialized()) return
         // All credentials are bundled in the SDK — no config needed
-        sdk.init(context = applicationContext)
+        sdk.init(context = applicationContext, config = VoiceBankingConfig(enableLogging = true))
     }
 
     // ─────────────────────────────────────────────────────────────────────────
