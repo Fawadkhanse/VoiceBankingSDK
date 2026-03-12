@@ -309,15 +309,6 @@ class VoiceBankingSDK private constructor() {
                                 requestId   = reqId
                             )
                         ))
-                        delay(100)
-                        SdkLogger.d(SUB, "Auto-completing action requestId=$reqId")
-                        repo?.sendActionStatus(
-                            requestId   = reqId,
-                            actionId    = event.action.action_id,
-                            serviceName = event.action.serviceName,
-                            status      = "completed",
-                            message     = "Completed automatically"
-                        )
                     }
 
                     is InternalChatEvent.BeneficiaryListRequested -> {

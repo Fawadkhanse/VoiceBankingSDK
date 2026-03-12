@@ -16,6 +16,7 @@ import com.voicebanking.sdk.models.SdkAction
 import com.voicebanking.sdk.models.SdkBeneficiary
 import com.voicebanking.sdk.models.SdkEvent
 import com.voicebanking.sdk.models.VoiceBankingConfig
+import com.voicebanking.sdk.utils.toJson
 
 class DemoActivity : AppCompatActivity() {
 
@@ -77,6 +78,7 @@ class DemoActivity : AppCompatActivity() {
 
     private fun observeSdk() {
         sdk.events.observe(this) { event ->
+            Log.d("Tag", "event observerd ${event.toJson()}")
             when (event) {
 
                 is SdkEvent.Connected ->
