@@ -11,6 +11,8 @@ import com.voicebanking.sdk.models.InternalChatEvent
 import com.voicebanking.sdk.models.InternalServerMessage
 import com.voicebanking.sdk.models.SdkBeneficiary
 import com.voicebanking.sdk.models.UserChatMessage
+import com.voicebanking.sdk.models.WsMessage
+import com.voicebanking.sdk.utils.toPojo
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import okhttp3.OkHttpClient
@@ -63,6 +65,7 @@ internal class BankChatRepository(
         val response = httpClient.newCall(request).execute()
         val body     = response.body?.string() ?: throw RuntimeException("Empty body from /start-session")
         val id       = JSONObject(body).getString("session_id")
+        Log.d(TAG, "startSession: $body")
         sessionId    = id
         Log.d(TAG, "session_id=$id")
         return id
@@ -83,7 +86,7 @@ internal class BankChatRepository(
                 _events.tryEmit(InternalChatEvent.Connected)
             }
             override fun onMessage(ws: WebSocket, text: String) {
-                Log.d(TAG, "WS RECV len=${text.length}")
+                Log.d(TAG, "WS RECV Response=${text}")
                 handleIncoming(text)
             }
             override fun onClosing(ws: WebSocket, code: Int, reason: String) {
@@ -142,12 +145,16 @@ internal class BankChatRepository(
     // ── Incoming parser ───────────────────────────────────────────────────────
 
     private fun handleIncoming(raw: String) {
+        if (raw.isBlank() || raw.trim().all { it.isDigit() }) {
+            Log.d(TAG, "Skipping non-JSON frame: $raw")
+            return
+        }
         try {
             val el = JsonParser.parseString(raw)
 
             if (el.isJsonArray) {
                 var actionPayload: InternalActionPayload? = null
-                var messageText:   String?               = null
+                var messageText: String? = null
 
                 el.asJsonArray.forEach { item ->
                     val obj = item.asJsonObject
@@ -161,9 +168,11 @@ internal class BankChatRepository(
                 return
             }
 
-            val obj = el.asJsonObject
+            val obj      = el.asJsonObject
+            val rootType = obj.get("type")?.asString
 
-            if (obj.get("type")?.asString == "server_request") {
+            // ── server_request (e.g. get_beneficiary_list) ────────────────────────
+            if (rootType == "server_request") {
                 val action    = obj.get("action")?.asString ?: return
                 val requestId = obj.get("request_id")?.asString ?: UUID.randomUUID().toString()
                 if (action == "get_beneficiary_list") {
@@ -172,15 +181,34 @@ internal class BankChatRepository(
                 return
             }
 
-            val payload = obj.get("payload") ?: return
+            // ── flat message/action (no payload wrapper) ──────────────────────────
+            // e.g. { "type": "message", "message": "..." }
+            if (obj.get("payload") == null) {
+                when (rootType) {
+                    "message" -> {
+                        val text = obj.get("message")?.asString ?: return
+                        _events.tryEmit(InternalChatEvent.MessageReceived(text))
+                    }
+                    "action" -> {
+                        val action = gson.fromJson(obj, InternalServerMessage.Action::class.java).action
+                        _events.tryEmit(InternalChatEvent.ActionReceived(action))
+                    }
+                }
+                return
+            }
+
+            // ── wrapped payload ───────────────────────────────────────────────────
+            // e.g. { "type": "message", "payload": { "message": "..." } }
+            val payload = obj.get("payload")
 
             if (payload.isJsonArray) {
                 handleIncoming(payload.toString())
                 return
             }
 
-            val payloadObj  = payload.asJsonObject
-            when (payloadObj.get("type")?.asString) {
+            val payloadObj = payload.asJsonObject
+
+            when (rootType) {
                 "message" -> {
                     val text = payloadObj.get("message")?.asString ?: return
                     _events.tryEmit(InternalChatEvent.MessageReceived(text))
@@ -190,8 +218,9 @@ internal class BankChatRepository(
                     _events.tryEmit(InternalChatEvent.ActionReceived(action))
                 }
             }
+
         } catch (e: Exception) {
-            Log.d(TAG, "Parse error: ${e.message}")
+            Log.e(TAG, "Parse error: ${e.message} | raw=$raw")
         }
     }
 }
